@@ -18,6 +18,8 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { getExercisesByCreator, assignExerciseToPatient } from "@/lib/firestore";
+import { collection, query, where, getDocs, orderBy } from "firebase/firestore";
+import { db } from "@/lib/firebase";
 import { Plus } from "lucide-react";
 import type { Exercise, InsertAssignedExercise } from "@shared/schema";
 
@@ -38,20 +40,83 @@ export function AssignExerciseDialog({
   const [exercises, setExercises] = useState<Exercise[]>([]);
   const [selectedExerciseId, setSelectedExerciseId] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  const [loadingExercises, setLoadingExercises] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    if (open) {
+    if (open && physioId) {
       loadExercises();
     }
   }, [open, physioId]);
 
   const loadExercises = async () => {
+    if (!physioId) {
+      toast({
+        title: "Error",
+        description: "Physiotherapist ID is missing",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setLoadingExercises(true);
+    setExercises([]); // Clear previous exercises
     try {
-      const exerciseList = await getExercisesByCreator(physioId);
+      // Try the helper function first
+      let exerciseList = await getExercisesByCreator(physioId);
+      console.log("Loaded exercises for physio", physioId, ":", exerciseList);
+      
+      // If no exercises found, try a direct query without orderBy as fallback
+      if (exerciseList.length === 0) {
+        console.log("No exercises from helper, trying direct query...");
+        const q = query(
+          collection(db, "exercises"),
+          where("createdBy", "==", physioId)
+        );
+        const snapshot = await getDocs(q);
+        exerciseList = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as Exercise[];
+        console.log("Direct query result:", exerciseList);
+      }
+      
       setExercises(exerciseList);
-    } catch (error) {
+      if (exerciseList.length === 0) {
+        console.warn("No exercises found for physio:", physioId);
+      }
+    } catch (error: any) {
       console.error("Error loading exercises:", error);
+      console.error("Error details:", {
+        code: error.code,
+        message: error.message,
+        physioId,
+      });
+      
+      // Try fallback query without orderBy
+      try {
+        console.log("Trying fallback query without orderBy...");
+        const q = query(
+          collection(db, "exercises"),
+          where("createdBy", "==", physioId)
+        );
+        const snapshot = await getDocs(q);
+        const fallbackExercises = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        })) as Exercise[];
+        console.log("Fallback query result:", fallbackExercises);
+        setExercises(fallbackExercises);
+      } catch (fallbackError: any) {
+        console.error("Fallback query also failed:", fallbackError);
+        toast({
+          title: "Error loading exercises",
+          description: fallbackError.message || "Could not load exercises. Please check console for details.",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setLoadingExercises(false);
     }
   };
 
@@ -119,7 +184,12 @@ export function AssignExerciseDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          {exercises.length === 0 ? (
+          {loadingExercises ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+              <span className="ml-2 text-sm text-muted-foreground">Loading exercises...</span>
+            </div>
+          ) : exercises.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-4">
               No exercises available. Create an exercise template first.
             </p>
