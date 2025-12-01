@@ -6,6 +6,7 @@ import { TopNav } from "@/components/TopNav";
 import { AssignPatientDialog } from "@/components/AssignPatientDialog";
 import { CreateExerciseDialog } from "@/components/CreateExerciseDialog";
 import { AssignExerciseDialog } from "@/components/AssignExerciseDialog";
+import { PatientDetailDialog } from "@/components/PatientDetailDialog";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,9 +15,17 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Users, Activity, ClipboardList, TrendingUp, Plus, Eye } from "lucide-react";
 import type { User, AssignedExercise } from "@shared/schema";
 
+interface PatientWithExercises extends User {
+  assignedExercises: AssignedExercise[];
+  totalExercises: number;
+  completedExercises: number;
+}
+
 export default function PhysiotherapistDashboard() {
   const { userProfile } = useAuth();
-  const [patients, setPatients] = useState<User[]>([]);
+  const [patients, setPatients] = useState<PatientWithExercises[]>([]);
+  const [selectedPatient, setSelectedPatient] = useState<User | null>(null);
+  const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [stats, setStats] = useState({
     totalPatients: 0,
     activeToday: 0,
@@ -37,12 +46,64 @@ export default function PhysiotherapistDashboard() {
       
       const snapshot = await getDocs(patientsQuery);
       const patientsData = snapshot.docs.map(doc => doc.data() as User);
-      setPatients(patientsData);
       
-      setStats(prev => ({
-        ...prev,
-        totalPatients: patientsData.length,
-      }));
+      // Fetch assigned exercises for each patient
+      const patientsWithExercises = await Promise.all(
+        patientsData.map(async (patient) => {
+          try {
+            const exercisesQuery = query(
+              collection(db, "patients", patient.uid, "assignedExercises")
+            );
+            const exercisesSnapshot = await getDocs(exercisesQuery);
+            const assignedExercises = exercisesSnapshot.docs.map((doc) => ({
+              id: doc.id,
+              ...doc.data(),
+            })) as AssignedExercise[];
+            
+            const totalExercises = assignedExercises.length;
+            const completedExercises = assignedExercises.filter(
+              (ex) => ex.status === "completed"
+            ).length;
+            
+            return {
+              ...patient,
+              assignedExercises,
+              totalExercises,
+              completedExercises,
+            } as PatientWithExercises;
+          } catch (error) {
+            console.error(`Error fetching exercises for patient ${patient.uid}:`, error);
+            return {
+              ...patient,
+              assignedExercises: [],
+              totalExercises: 0,
+              completedExercises: 0,
+            } as PatientWithExercises;
+          }
+        })
+      );
+      
+      setPatients(patientsWithExercises);
+      
+      // Calculate stats
+      const totalExercises = patientsWithExercises.reduce(
+        (sum, p) => sum + p.totalExercises,
+        0
+      );
+      const totalCompleted = patientsWithExercises.reduce(
+        (sum, p) => sum + p.completedExercises,
+        0
+      );
+      const completionRate = totalExercises > 0 
+        ? Math.round((totalCompleted / totalExercises) * 100) 
+        : 0;
+      
+      setStats({
+        totalPatients: patientsWithExercises.length,
+        activeToday: 0, // TODO: Calculate based on recent activity
+        totalExercises,
+        completionRate,
+      });
     } catch (error) {
       console.error("Error fetching patients:", error);
     } finally {
@@ -203,11 +264,11 @@ export default function PhysiotherapistDashboard() {
                       
                       <div className="grid grid-cols-3 gap-2 text-center mb-4">
                         <div>
-                          <p className="text-2xl font-bold">0</p>
+                          <p className="text-2xl font-bold">{patient.totalExercises}</p>
                           <p className="text-xs text-muted-foreground">Exercises</p>
                         </div>
                         <div>
-                          <p className="text-2xl font-bold">0</p>
+                          <p className="text-2xl font-bold">{patient.completedExercises}</p>
                           <p className="text-xs text-muted-foreground">Completed</p>
                         </div>
                         <div>
@@ -217,7 +278,16 @@ export default function PhysiotherapistDashboard() {
                       </div>
 
                       <div className="flex gap-2">
-                        <Button variant="outline" className="flex-1" size="sm" data-testid={`button-view-${patient.uid}`}>
+                        <Button
+                          variant="outline"
+                          className="flex-1"
+                          size="sm"
+                          data-testid={`button-view-${patient.uid}`}
+                          onClick={() => {
+                            setSelectedPatient(patient);
+                            setViewDialogOpen(true);
+                          }}
+                        >
                           <Eye className="w-4 h-4 mr-1" />
                           View
                         </Button>
@@ -238,6 +308,15 @@ export default function PhysiotherapistDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Patient Detail Dialog */}
+      {selectedPatient && (
+        <PatientDetailDialog
+          patient={selectedPatient}
+          open={viewDialogOpen}
+          onOpenChange={setViewDialogOpen}
+        />
+      )}
     </div>
   );
 }

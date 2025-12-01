@@ -18,6 +18,15 @@ import { Badge } from "@/components/ui/badge";
 import { ClipboardList, Activity as ActivityIcon, Sparkles } from "lucide-react";
 import type { AssignedExercise } from "@shared/schema";
 
+// ⭐ NEW IMPORTS
+import {
+  updateAssignedExercise,
+  createExerciseProgress,
+  updateExerciseProgress,
+} from "@/lib/firestore";
+
+import { useToast } from "@/hooks/use-toast";
+
 interface N8nRecommendation {
   feedback: string;
   recommendedExercise: string;
@@ -28,10 +37,18 @@ interface N8nRecommendation {
 
 export default function PatientDashboard() {
   const { userProfile } = useAuth();
+  const toast = useToast();
+
+  // Existing states
   const [assignedExercises, setAssignedExercises] = useState<AssignedExercise[]>([]);
   const [recommendations, setRecommendations] = useState<N8nRecommendation[]>([]);
   const [loadingExercises, setLoadingExercises] = useState(true);
   const [loadingRecommendations, setLoadingRecommendations] = useState(true);
+
+  // ⭐ NEW STATES
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [activeAssignmentId, setActiveAssignmentId] = useState<string | null>(null);
+  const [activeProgressId, setActiveProgressId] = useState<string | null>(null);
 
   const {
     connected,
@@ -44,7 +61,7 @@ export default function PatientDashboard() {
     stopRecording,
   } = useArduinoConnection(userProfile?.uid || "");
 
-  // 🟢 Fetch Assigned Exercises
+  // Fetch Assigned Exercises
   useEffect(() => {
     if (!userProfile) return;
 
@@ -65,7 +82,7 @@ export default function PatientDashboard() {
     return () => unsubscribe();
   }, [userProfile]);
 
-  // 🟢 Fetch N8n Recommendations from Firestore
+  // Fetch N8n Recommendations from Firestore
   useEffect(() => {
     if (!userProfile) return;
 
@@ -90,9 +107,180 @@ export default function PatientDashboard() {
     return () => unsubscribe();
   }, [userProfile]);
 
-  const handleStartExercise = (exerciseId: string) => {
-    if (connected) startRecording(exerciseId);
+  // ⭐ Original n8n function (DO NOT TOUCH)
+  const fetchNetworkRecommendation = async () => {
+    if (!userProfile) return;
+
+    try {
+      const response = await fetch(
+        "https://hack12.app.n8n.cloud/webhook/patient-query",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            patientId: userProfile.uid,
+            //name: userProfile.name,
+            condition: "knee_rehabilitation",
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        console.error("Failed to fetch n8n response");
+        setLoadingRecommendations(false);
+        return;
+      }
+
+      const data = await response.json();
+
+      if (data?.recommendations && Array.isArray(data.recommendations)) {
+        setRecommendations(data.recommendations);
+      } else if (data?.recommendedExercise) {
+        setRecommendations([data]);
+      }
+
+      setLoadingRecommendations(false);
+    } catch (error) {
+      console.error("Error fetching n8n webhook data:", error);
+      setLoadingRecommendations(false);
+    }
   };
+
+  // Poll n8n every 30s
+  useEffect(() => {
+    if (!userProfile) return;
+    fetchNetworkRecommendation();
+    const interval = setInterval(fetchNetworkRecommendation, 30000);
+    return () => clearInterval(interval);
+  }, [userProfile]);
+
+  // ⭐ NEW FUNCTION: START EXERCISE
+  const handleStartExercise = async (exercise: AssignedExercise) => {
+    if (!userProfile?.uid) return;
+
+    if (!connected) {
+      toast.toast({
+        title: "Device not connected",
+        description: "Connect your hardware device before starting the session.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (sessionLoading || activeAssignmentId) {
+      toast.toast({
+        title: "Session already in progress",
+        description: "Finish the current exercise before starting another.",
+      });
+      return;
+    }
+
+    setSessionLoading(true);
+
+    try {
+      await startRecording(exercise.exerciseId);
+
+      await updateAssignedExercise(userProfile.uid, exercise.id, {
+        status: "in_progress",
+      });
+
+      const progress = await createExerciseProgress(userProfile.uid, {
+        patientId: userProfile.uid,
+        exerciseId: exercise.exerciseId,
+        assignedExerciseId: exercise.id,
+        sessionStartTime: Date.now(),
+      });
+
+      setActiveAssignmentId(exercise.id);
+      setActiveProgressId(progress.id);
+
+      toast.toast({
+        title: "Exercise started",
+        description: `${exercise.exerciseName} session has begun.`,
+      });
+    } catch (error: any) {
+      console.error("Error starting exercise:", error);
+      stopRecording();
+
+      try {
+        await updateAssignedExercise(userProfile.uid, exercise.id, {
+          status: exercise.status,
+        });
+      } catch (revertError) {
+        console.error("Failed to revert exercise status:", revertError);
+      }
+
+      toast.toast({
+        title: "Could not start session",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSessionLoading(false);
+    }
+  };
+
+  // ⭐ NEW FUNCTION: COMPLETE EXERCISE
+  const handleCompleteExercise = async () => {
+    if (!userProfile?.uid || !activeAssignmentId) return;
+
+    setSessionLoading(true);
+
+    try {
+      stopRecording();
+
+      const completedAt = Date.now();
+
+      await updateAssignedExercise(userProfile.uid, activeAssignmentId, {
+        status: "completed",
+        completedAt,
+      });
+
+      if (activeProgressId) {
+        await updateExerciseProgress(userProfile.uid, activeProgressId, {
+          status: "completed",
+          sessionEndTime: completedAt,
+          completedAt,
+        });
+      }
+
+      toast.toast({
+        title: "Exercise completed",
+        description: "Great job! Exercise has been marked complete.",
+      });
+
+      // ⭐ Call original n8n function
+      setTimeout(() => {
+        fetchNetworkRecommendation();
+      }, 2000);
+    } catch (error: any) {
+      console.error("Error completing exercise:", error);
+      toast.toast({
+        title: "Could not complete exercise",
+        description: error?.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setActiveAssignmentId(null);
+      setActiveProgressId(null);
+      setSessionLoading(false);
+    }
+  };
+
+  // ⭐ NEW: Stop recording if exercise is marked completed by backend
+  useEffect(() => {
+    if (!activeAssignmentId) return;
+    const activeExercise = assignedExercises.find((ex) => ex.id === activeAssignmentId);
+    if (activeExercise && activeExercise.status === "completed") {
+      setActiveAssignmentId(null);
+      setActiveProgressId(null);
+      stopRecording();
+    }
+  }, [assignedExercises, activeAssignmentId, stopRecording]);
+
+  // ---- UI Rendering ----
 
   return (
     <div className="min-h-screen bg-background">
@@ -112,7 +300,7 @@ export default function PatientDashboard() {
           )}
         </div>
 
-        {/* 🔹 Arduino + Live Readings Section */}
+        {/* Arduino Panel */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
           <div className="lg:col-span-1">
             <ArduinoConnectionPanel
@@ -147,7 +335,7 @@ export default function PatientDashboard() {
           </div>
         </div>
 
-        {/* 🔹 Assigned Exercises Section */}
+        {/* Assigned Exercises */}
         <Card className="mb-8">
           <CardHeader>
             <CardTitle className="text-2xl font-semibold">Assigned Exercises</CardTitle>
@@ -174,7 +362,25 @@ export default function PatientDashboard() {
                   <ExerciseCard
                     key={exercise.id}
                     exercise={exercise}
-                    onStart={() => handleStartExercise(exercise.id)}
+
+                    // ⭐ NEW PROPS
+                    progress={
+                      exercise.status === "completed"
+                        ? 100
+                        : exercise.status === "in_progress"
+                        ? 50
+                        : 0
+                    }
+                    onStart={() => handleStartExercise(exercise)}
+                    onStop={handleCompleteExercise}
+                    isActive={activeAssignmentId === exercise.id}
+                    isRecording={isRecording}
+                    disabled={sessionLoading && activeAssignmentId !== exercise.id}
+                    loading={
+                      sessionLoading &&
+                      activeAssignmentId === exercise.id &&
+                      isRecording
+                    }
                   />
                 ))}
               </div>
@@ -182,7 +388,7 @@ export default function PatientDashboard() {
           </CardContent>
         </Card>
 
-        {/* 🔹 Recommended Exercises Section (from n8n) */}
+        {/* Recommended Exercises */}
         <Card>
           <CardHeader>
             <CardTitle className="text-2xl font-semibold flex items-center">
@@ -193,6 +399,7 @@ export default function PatientDashboard() {
               Based on your recent exercise data and device readings
             </CardDescription>
           </CardHeader>
+
           <CardContent>
             {loadingRecommendations ? (
               <div className="flex items-center justify-center py-12">

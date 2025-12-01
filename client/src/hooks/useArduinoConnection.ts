@@ -70,7 +70,7 @@ export function useArduinoConnection(patientId: string) {
 
         // 🔗 Send to n8n webhook
         try {
-          const n8nRes = await fetch("https://hackgroup.app.n8n.cloud/webhook-test/patient-query", {
+          const n8nRes = await fetch("https://hack12.app.n8n.cloud/webhook/patient-query", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(readingData),
@@ -197,7 +197,7 @@ export function useArduinoConnection(patientId: string) {
           return;
         }
 
-        const res = await fetch("https://hackgroup.app.n8n.cloud/webhook/patient-query", {
+        const res = await fetch("https://hack12.app.n8n.cloud/webhook/patient-query", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ patientId }),
