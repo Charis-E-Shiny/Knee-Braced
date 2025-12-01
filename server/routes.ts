@@ -1,15 +1,22 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import fetch from "node-fetch"; // 👈 install with: npm install node-fetch
+import fetch from "node-fetch";
 import { storage } from "./storage";
 
+async function safeParseJSON(response: any) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text }; // 👈 prevents crashes
+  }
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
-  // 🟢 Health check route
   app.get("/api/health", (_req: Request, res: Response) => {
     res.json({ status: "ok", message: "Server is running 🚀" });
   });
 
-  // 🟢 Example route using your storage (you can modify later)
   app.get("/api/users", async (_req: Request, res: Response) => {
     try {
       const users = await storage.getAllUsers?.();
@@ -20,41 +27,62 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // 🟢 Forward patient data to n8n (production)
+  // 🟢 Main n8n forwarder (NO CRASHES)
   app.post("/api/n8n/patient-query", async (req: Request, res: Response) => {
     try {
-      const response = await fetch("https://hackgroup.app.n8n.cloud/webhook/patient-query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req.body),
-      });
+      const response = await fetch(
+        "https://hack12.app.n8n.cloud/webhook/patient-query",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req.body),
+        }
+      );
 
-      const data = await response.json();
-      res.status(response.status).json(data);
+      const data = await safeParseJSON(response); // 👈 FIX
+
+      res.status(response.status).json({
+        status: response.status,
+        ok: response.ok,
+        data,
+      });
     } catch (error) {
       console.error("❌ Error forwarding to n8n:", error);
-      res.status(500).json({ error: "Failed to reach n8n webhook" });
+      res.status(500).json({
+        error: "Failed to reach n8n webhook",
+        details: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 
-  // 🧪 Forward to n8n test webhook
-  app.post("/api/n8n/patient-query-test", async (req: Request, res: Response) => {
+  // 🧪 Same fix for test webhook
+  app.post("/api/n8n/patient-query", async (req: Request, res: Response) => {
     try {
-      const response = await fetch("https://hackgroup.app.n8n.cloud/webhook-test/patient-query", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(req.body),
-      });
+      const response = await fetch(
+        "https://hack12.app.n8n.cloud/webhook/patient-query",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(req.body),
+        }
+      );
 
-      const data = await response.json();
-      res.status(response.status).json(data);
+      const data = await safeParseJSON(response);
+
+      res.status(response.status).json({
+        status: response.status,
+        ok: response.ok,
+        data,
+      });
     } catch (error) {
       console.error("❌ Error contacting n8n test webhook:", error);
-      res.status(500).json({ error: "Failed to reach n8n test webhook" });
+      res.status(500).json({
+        error: "Failed to reach n8n test webhook",
+        details: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 
-  // 🔧 Create HTTP server
   const httpServer = createServer(app);
   console.log("✅ Routes registered successfully");
   return httpServer;

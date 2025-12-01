@@ -29,7 +29,7 @@ exports.onReadingCreated = functions.firestore
 
     // n8n webhook URL - should be configured as environment variable
     const webhookUrl = functions.config().n8n?.webhook_url || 
-                      "https://clakshanaa1.app.n8n.cloud/webhook-test/patient-query";
+                      "https://hack12.app.n8n.cloud/webhook/patient-query";
 
     try {
       // Prepare payload for n8n

@@ -13,7 +13,7 @@ BLUETOOTH_PORT = 'COM6'  # Windows: usually COM3, COM4, etc.
 BAUD_RATE = 9600
 
 # N8N Webhook URL
-N8N_WEBHOOK_URL = "https://clakshanaa1.app.n8n.cloud/webhook-test/patient-query"
+N8N_WEBHOOK_URL = "https://hack12.app.n8n.cloud/webhook/patient-query"
 
 def parse_serial_data(line):
     """

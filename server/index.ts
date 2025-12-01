@@ -63,7 +63,7 @@ app.use((req, res, next) => {
 // 🟢 n8n Proxy Route (Prevents CORS issues)
 app.post("/proxy/n8n", async (req: Request, res: Response) => {
   try {
-    const response = await fetch("https://hackgroup.app.n8n.cloud/webhook/patient-query", {
+    const response = await fetch("https://hack12.app.n8n.cloud/webhook/patient-query", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req.body),
